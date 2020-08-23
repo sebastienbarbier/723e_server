@@ -29,6 +29,10 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 def ApiCoupon(request, product_id, coupon_code):
     res = {}
 
+
+    coupon_strip = stripe.PromotionCode.list(code=coupon_code)
+    print(coupon_strip)
+
     product = get_object_or_404(Product, pk=product_id)
     coupon = get_object_or_404(Coupon, code=coupon_code)
 
