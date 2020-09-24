@@ -13,8 +13,6 @@ from rest_framework.authtoken.models import Token
 
 from seven23 import settings
 from seven23.models.terms.models import TermsAndConditions
-from seven23.models.saas.serializers import ProductSerializer
-from seven23.models.saas.models import Product
 
 from allauth.account.models import EmailAddress
 

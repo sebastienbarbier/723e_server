@@ -6,7 +6,6 @@ from seven23 import settings
 from django.http import HttpResponse
 from django.shortcuts import render
 
-from seven23.models.saas.models import Product
 from seven23.models.terms.models import TermsAndConditions
 
 def home(request):
@@ -70,8 +69,6 @@ def home(request):
         ]
 
         price = 0
-        if Product.objects.all():
-            price = Product.objects.all()[0].price
 
         return render(request, 'home.html', {
             "price": price,

@@ -23,8 +23,6 @@ from django.shortcuts import get_object_or_404
 from seven23 import settings
 from seven23.models.profile.models import Profile
 from seven23.models.terms.models import TermsAndConditions
-from seven23.models.saas.models import Charge, Product, Coupon
-from seven23.models.saas.serializers import ChargeSerializer
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
