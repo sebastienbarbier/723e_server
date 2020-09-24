@@ -1,7 +1,7 @@
 """
     Root views of api
 """
-
+import stripe
 import json
 import os
 import markdown2
@@ -32,7 +32,6 @@ def api_init(request):
     result['contact'] = settings.CONTACT_EMAIL
 
     if result['saas']:
-        result['products'] = ProductSerializer(list(Product.objects.all()), many=True).data
         result['trial_period'] = settings.TRIAL_PERIOD
         result['stripe_key'] = settings.STRIPE_PUBLIC_KEY
 

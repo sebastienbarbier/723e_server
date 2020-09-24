@@ -6,6 +6,8 @@ import json
 import os
 import markdown2
 import urllib.parse
+import datetime
+import time
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -19,95 +21,96 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 
 from seven23 import settings
+from seven23.models.profile.models import Profile
 from seven23.models.terms.models import TermsAndConditions
 from seven23.models.saas.models import Charge, Product, Coupon
 from seven23.models.saas.serializers import ChargeSerializer
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
-@api_view(['GET'])
-def ApiCoupon(request, product_id, coupon_code):
-    res = {}
-
-
-    coupon_strip = stripe.PromotionCode.list(code=coupon_code)
-    print(coupon_strip)
-
-    product = get_object_or_404(Product, pk=product_id)
-    coupon = get_object_or_404(Coupon, code=coupon_code)
-
-    if not coupon.is_active():
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    res['coupon_id'] = coupon.id
-    res['percent_off'] = coupon.percent_off
-    res['price'] = product.price - (product.price * coupon.percent_off / 100)
-
-    j = json.dumps(res, separators=(',', ':'))
-    return HttpResponse(j, content_type='application/json')
-
-@api_view(['GET'])
-def StripeGenerateSession(request):
-
-    product = None
-    coupon = None
-
-    if request.GET.get("product_id") and request.GET.get("success_url") and request.GET.get("cancel_url"):
-        product = Product.objects.get(pk=request.GET.get("product_id"))
-    else:
-        return Response(status=status.HTTP_400_BAD_REQUEST)
-
-    if not product.stripe_product_id:
-        return Response(status=status.HTTP_400_BAD_REQUEST)
-
+@api_view(['GET', 'DELETE'])
+def StripeSubscriptions(request):
+    stripe_customer_id = None
     try:
-        coupon = Coupon.objects.get(code=request.GET.get('coupon_code'))
+        stripe_customer_id = request.user.profile.stripe_customer_id
     except:
         pass
 
-    if coupon and coupon.is_active() and product.apply_coupon(request.GET.get('coupon_code')) == 0:
-        charge = Charge.objects.create(
-            user=request.user,
-            product=product,
-            coupon=coupon,
-            paiment_method='COUPON',
-            status='SUCCESS'
-        )
-        j = json.dumps(ChargeSerializer(charge).data, separators=(',', ':'))
+    if request.method == 'GET':
+        products = stripe.Product.list(active=True)
+        prices = stripe.Price.list(product=products.data[0].id)
+
+        if not stripe_customer_id:
+            j = json.dumps({
+                'products': products,
+                'prices': stripe.Price.list(product=products.data[0].id)
+            }, separators=(',', ':'))
+        else:
+            subscriptions = stripe.Subscription.list(customer=stripe_customer_id)
+            paymentMethod = None
+            if len(subscriptions.data):
+                paymentMethod = stripe.PaymentMethod.retrieve(subscriptions.data[0].default_payment_method)
+            j = json.dumps({
+                'subscriptions': subscriptions,
+                'invoices': stripe.Invoice.list(customer=stripe_customer_id),
+                'products': products,
+                'prices': stripe.Price.list(product=products.data[0].id),
+                'paymentMethod': paymentMethod
+            }, separators=(',', ':'))
+
         return HttpResponse(j, content_type='application/json')
 
-    price = stripe.Price.create(
-      product=product.stripe_product_id,
-      unit_amount=int(product.apply_coupon(request.GET.get('coupon_code')) * 100),
-      active=True,
-      currency='eur'
-    )
+    elif request.method == 'DELETE':
 
+        if not stripe_customer_id:
+            return HttpResponse(status=400)
+
+        subscription = stripe.Subscription.list(customer=stripe_customer_id)
+        stripe.Subscription.delete(subscription.data[0])
+        return Response(status=status.HTTP_200_OK)
+    else:
+        return HttpResponse(status=400)
+
+
+
+@api_view(['GET'])
+def StripeGenerateSession(request):
     stripe_customer_id = request.user.profile.stripe_customer_id
+
+    text_rate = stripe.TaxRate.list().data[0].id;
+
+    timestamp_now = int(time.mktime(datetime.datetime.now().timetuple()))
+    timestamp_valid_until = int(time.mktime(request.user.profile.valid_until.timetuple()))
+
+    trial_period_days = None
+    if timestamp_now < timestamp_valid_until:
+        trial_period_days = int((timestamp_valid_until - timestamp_now) / 86400)
+        if trial_period_days < 1:
+            trial_period_days = None
+
+
     session = stripe.checkout.Session.create(
       customer=request.user.profile.stripe_customer_id,
       customer_email=request.user.email if not stripe_customer_id else None,
       payment_method_types=['card'],
+      allow_promotion_codes=True,
       line_items=[{
-        'price': price.id,
-        'quantity': 1,
+        'price': request.GET.get("price_id"),
+        'quantity': 1
       }],
-      mode='payment',
+      mode='subscription',
       # success_url='https://example.com/success?session_id={CHECKOUT_SESSION_ID}',
       # cancel_url='https://example.com/cancel',
       success_url=urllib.parse.urljoin(request.GET.get("success_url"), 'success'),
       cancel_url=request.GET.get("cancel_url"),
+      subscription_data={
+        'default_tax_rates': [text_rate],
+        'trial_period_days': trial_period_days
+      }
     )
 
-    Charge.objects.create(
-        user=request.user,
-        product=product,
-        coupon=coupon,
-        paiment_method='STRIPE',
-        reference_id=session.id,
-        stripe_session_id=session.id,
-        status='PENDING'
-    )
+    request.user.profile.stripe_session_id = session.id
+    request.user.profile.save()
 
     j = json.dumps({
         'session_id': session
@@ -118,7 +121,6 @@ def StripeGenerateSession(request):
 @api_view(['POST'])
 def StripeWebhook(request):
     payload = request.body
-    print(payload)
     try:
         event = stripe.Event.construct_from(
           json.loads(payload), stripe.api_key
@@ -127,21 +129,23 @@ def StripeWebhook(request):
         # Invalid payload
         return HttpResponse(status=400)
     # Handle the event
+
     if event.type == 'checkout.session.completed':
         checkout = event.data.object # contains a stripe.PaymentIntent
 
-        charge = Charge.objects.get(reference_id=checkout.id)
-        if charge:
-            charge.status = 'SUCCESS'
-            charge.save()
-
-            charge.user.profile.stripe_customer_id = checkout.customer
-            charge.user.profile.save()
+        profile = Profile.objects.get(stripe_session_id=checkout.id)
+        if profile:
+            profile.stripe_customer_id = checkout.customer
+            profile.save()
             return Response(status=status.HTTP_200_OK)
-        else:
-            return HttpResponse(status=400)
-        print(checkout)
-        print('checkout was completed!')
+
+    elif event.type == 'invoice.paid':
+        invoice = event.data.object
+
+        profile = Profile.objects.get(stripe_customer_id=invoice.customer)
+        profile.valid_until = datetime.datetime.fromtimestamp(invoice.lines.data[0].period.end)
+        profile.save()
+        return Response(status=status.HTTP_200_OK)
     else:
         # Unexpected event type
         return HttpResponse(status=400)

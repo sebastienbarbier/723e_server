@@ -38,7 +38,7 @@ def email(request):
     j = json.dumps(UserSerializer(request.user).data, separators=(',', ':'))
     return HttpResponse(j, content_type='application/json')
 
-@api_view(["DELETE"])
+@api_view(['DELETE'])
 def revoke_token(request):
     """
         Revoke user token
@@ -51,7 +51,7 @@ def revoke_token(request):
 
     return HttpResponse(status=200)
 
-@api_view(["DELETE"])
+@api_view(['DELETE'])
 def delete_user(request):
     """
         Permanently delete a user
